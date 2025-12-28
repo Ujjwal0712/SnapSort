@@ -8,6 +8,7 @@ import hashlib
 import asyncio
 from datetime import datetime, timedelta
 from uuid import uuid4
+from datetime import timezone
 
 from psycopg_pool import AsyncConnectionPool
 from mailersend import MailerSendClient, EmailBuilder
@@ -25,48 +26,91 @@ class OtpService:
         self.email_client = MailerSendClient(api_key=settings.MAILERSEND_API_KEY)
     
     def _generate_otp(self) -> str:
-        """Generate a secure random OTP."""
-        return ''.join(secrets.choice('0123456789') for _ in range(settings.OTP_LENGTH))
+        """
+        Generate a cryptographically secure random numeric OTP.
+        Uses secrets.randbelow for crypto-secure randomness with zero-padding.
+        """
+        length = settings.OTP_LENGTH
+        if length <= 0:
+            raise ValueError("Invalid OTP length")
+        
+        # Generate cryptographically secure random number between 0 and 10^length
+        max_value = 10 ** length
+        n = secrets.randbelow(max_value)
+        
+        # Format with leading zeros to maintain consistent length
+        otp = str(n).zfill(length)
+        return otp
     
     def _hash_otp(self, otp: str) -> str:
         """Hash OTP for secure storage."""
         return hashlib.sha256(otp.encode()).hexdigest()
     
-    async def send_and_store_otp(self, user_id: str, email: str) -> bool:
+    async def send_and_store_otp(self, user_id: str, email: str, background_tasks=None) -> bool:
         """
-        Generate OTP, send via email, and store hash in database.
+        Generate OTP, store hash in database, and send via email.
         
         Args:
             user_id: User's UUID
             email: User's email address
+            background_tasks: Optional FastAPI BackgroundTasks for async email
             
         Returns:
-            True if successful, raises exception otherwise
+            True if OTP stored successfully, raises exception otherwise
         """
         # Generate OTP
         otp = self._generate_otp()
         otp_hash = self._hash_otp(otp)
-        expires_at = datetime.utcnow() + timedelta(minutes=settings.OTP_EXPIRY_MINUTES)
+        expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.OTP_EXPIRY_MINUTES)
         
-        logger.info("Sending OTP to: %s", email)
+        logger.info("Generating OTP for: %s", email)
         
         try:
-            # Store OTP in database
+            # Store OTP in database first (this is fast)
             async with asyncio.timeout(5):
                 await self._store_otp(user_id, otp_hash, expires_at)
             
-            # Send email
-            await self._send_otp_email(email, otp)
+            # Send email in background if background_tasks provided
+            if background_tasks:
+                background_tasks.add_task(self._send_otp_email_sync, email, otp)
+                logger.info("OTP stored, email queued for: %s", email)
+            else:
+                # Fallback to synchronous sending
+                self._send_otp_email_sync(email, otp)
+                logger.info("OTP sent successfully to: %s", email)
             
-            logger.info("OTP sent successfully to: %s", email)
             return True
             
         except asyncio.TimeoutError:
-            logger.error("Timeout sending/storing OTP for: %s", email)
+            logger.error("Timeout storing OTP for: %s", email)
             raise
         except Exception as e:
             logger.error("Error sending OTP to %s: %s", email, str(e))
             raise
+    
+    def _send_otp_email_sync(self, email: str, otp: str):
+        """Send OTP via email using MailerSend (synchronous for background task)."""
+        try:
+            email_message = (
+                EmailBuilder()
+                .from_email(settings.MAILERSEND_FROM_EMAIL, "SnapSort")
+                .to_many([{"email": email}])
+                .subject("Your SnapSort Verification Code")
+                .html(f"""
+                    <h2>Your Verification Code</h2>
+                    <p>Use the following code to verify your email:</p>
+                    <h1 style="font-size: 32px; letter-spacing: 5px;">{otp}</h1>
+                    <p>This code expires in {settings.OTP_EXPIRY_MINUTES} minutes.</p>
+                    <p>If you didn't request this, please ignore this email.</p>
+                """)
+                .text(f"Your SnapSort verification code is: {otp}. Expires in {settings.OTP_EXPIRY_MINUTES} minutes.")
+                .build()
+            )
+            
+            self.email_client.emails.send(email_message)
+            logger.info("Email sent successfully to: %s", email)
+        except Exception as e:
+            logger.error("Failed to send email to %s: %s", email, str(e))
     
     async def _store_otp(self, user_id: str, otp_hash: str, expires_at: datetime):
         """Store OTP hash in database."""
@@ -75,15 +119,15 @@ class OtpService:
                 # Upsert - update if exists, insert if not
                 await cur.execute(
                     """
-                    INSERT INTO user_otps (id, user_id, email_otp_hash, expires_at, attempts)
-                    VALUES (%s, %s, %s, %s, 0)
+                    INSERT INTO user_otps (user_id, email_otp_hash, expires_at, attempts)
+                    VALUES (%s, %s, %s, 0)
                     ON CONFLICT (user_id) DO UPDATE SET
                         email_otp_hash = EXCLUDED.email_otp_hash,
                         expires_at = EXCLUDED.expires_at,
                         attempts = 0,
                         created_at = now()
                     """,
-                    (str(uuid4()), user_id, otp_hash, expires_at)
+                    (user_id, otp_hash, expires_at)
                 )
                 await conn.commit()
     
@@ -106,20 +150,20 @@ class OtpService:
         )
         
         response = self.email_client.emails.send(email_message)
-        logger.info("Email sent, message_id: %s", response.message_id)
+        logger.info("Email sent successfully to: %s", email)
     
-    async def verify_otp(self, user_id: str, otp: str) -> bool:
+    async def verify_otp(self, request: OtpVerificationRequest) -> bool:
         """
         Verify OTP for a user.
         
         Args:
-            user_id: User's UUID
-            otp: OTP to verify
+            request: OtpVerificationRequest containing user_id and otp
             
         Returns:
             True if valid, False otherwise
         """
-        otp_hash = self._hash_otp(otp)
+        user_id = str(request.user_id)
+        otp_hash = self._hash_otp(request.otp)
         
         try:
             async with asyncio.timeout(5):
@@ -140,10 +184,23 @@ class OtpService:
                             logger.warning("No OTP found for user: %s", user_id)
                             return False
                         
-                        stored_hash, expires_at, attempts = result
+                        # Access as dictionary (psycopg returns dict-like rows)
+                        stored_hash = result['email_otp_hash']
+                        expires_at = result['expires_at']
+                        attempts = result['attempts']
                         
-                        # Check expiry
-                        if datetime.utcnow() > expires_at:
+                        # Handle timezone-aware datetime comparison
+                        now = datetime.now(timezone.utc)
+                        
+                        # Convert expires_at to UTC for comparison
+                        if expires_at.tzinfo is not None:
+                            expires_at_utc = expires_at.astimezone(timezone.utc)
+                        else:
+                            expires_at_utc = expires_at.replace(tzinfo=timezone.utc)
+                        
+                        logger.info("Now: %s, Expires: %s", now, expires_at_utc)
+                        
+                        if now > expires_at_utc:
                             logger.warning("OTP expired for user: %s", user_id)
                             return False
                         

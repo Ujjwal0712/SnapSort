@@ -25,8 +25,8 @@ def upgrade() -> None:
         CREATE TABLE users (
             id UUID PRIMARY KEY,
             email VARCHAR(255) UNIQUE NOT NULL,
-            username VARCHAR(50) UNIQUE NOT NULL,
-            password_hash VARCHAR(255) NOT NULL,
+            username VARCHAR(50) UNIQUE,
+            is_active BOOLEAN NOT NULL DEFAULT FALSE,
             selfie_url TEXT,
             created_at TIMESTAMP DEFAULT NOW(),
             updated_at TIMESTAMP DEFAULT NOW()
@@ -49,8 +49,7 @@ def upgrade() -> None:
     # User OTPs table
     op.execute("""
         CREATE TABLE user_otps (
-            id UUID PRIMARY KEY,
-            user_id UUID NOT NULL UNIQUE,
+            user_id UUID PRIMARY KEY,
             email_otp_hash VARCHAR,
             expires_at TIMESTAMPTZ NOT NULL,
             attempts SMALLINT NOT NULL DEFAULT 0,

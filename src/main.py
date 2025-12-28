@@ -10,6 +10,8 @@ from src.config.settings import settings
 from src.config.database import init_async_pool, close_async_pool
 from src.config.logger import logger
 from src.routers import authentication
+from src.middlewares.response_time import ResponseTimeMiddleware
+from src.middlewares.cors import CORSMiddleware
 
 
 @asynccontextmanager
@@ -34,10 +36,41 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
-    debug=settings.DEBUG,
-    lifespan=lifespan
+    description="""
+            ## SnapSort - AI-Powered Photo Segregation System
+
+            SnapSort is a photo-sharing application that uses **AI-based face recognition** 
+            to automatically segregate and show users only the photos where they appear.
+
+            ### Key Features:
+            - 🎯 **Smart Photo Segregation**: AI detects faces and matches them to users
+            - 👥 **Groups & Organizations**: Create groups for events, manage members
+            - 📸 **Bulk Upload**: Upload many photos at once, processed in background
+            - 🔐 **Secure Access**: Only see photos where you appear
+            - 📥 **Easy Download**: Download your photos individually or in bulk
+
+            ### Face Recognition Providers:
+            - DeepFace (local, free)
+            - InsightFace (local, better accuracy)
+            - AWS Rekognition (cloud)
+            - Google Vision (cloud)
+    """,
+    docs_url="/docs",
+    redoc_url="/redoc",
+    lifespan=lifespan,
 )
 
+# Add middleware
+app.add_middleware(ResponseTimeMiddleware)
+
+# CORS configuration
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Configure appropriately for production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Include routers
 app.include_router(authentication.router, prefix="/auth", tags=["Authentication"])

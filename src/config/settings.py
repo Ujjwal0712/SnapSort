@@ -68,7 +68,7 @@ class Settings(BaseSettings):
     POOL_MAX_SIZE: int = 20
 
     MAILERSEND_API_KEY: str
-    MAILERSEND_FROM_EMAIL: str = "22160@iiitu.ac.in"
+    MAILERSEND_FROM_EMAIL: str = "snapsort@test-ywj2lpnz12kg7oqz.mlsender.net"
 
     OTP_LENGTH: int = 6
     OTP_EXPIRY_MINUTES: int = 10
