@@ -1,0 +1,3 @@
+.snapsortenv/
+__pycache__/
+.env

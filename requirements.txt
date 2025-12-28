@@ -1,0 +1,18 @@
+# FastAPI and Server
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+python-multipart>=0.0.6
+
+# Database
+psycopg[binary,pool]>=3.1.0
+
+# Settings
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+
+# Redis
+redis>=5.0.0
+
+# JWT
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
