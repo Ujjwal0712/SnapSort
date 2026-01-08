@@ -16,3 +16,6 @@ redis>=5.0.0
 # JWT
 python-jose[cryptography]>=3.3.0
 passlib[bcrypt]>=1.7.4
+
+# AWS S3
+boto3>=1.34.0

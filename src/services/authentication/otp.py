@@ -15,6 +15,7 @@ from mailersend import MailerSendClient, EmailBuilder
 
 from src.config.settings import settings
 from src.config.logger import logger
+from src.schemas.authentication import OtpVerificationRequest
 
 
 class OtpService:
@@ -162,7 +163,7 @@ class OtpService:
         Returns:
             True if valid, False otherwise
         """
-        user_id = str(request.user_id)
+    
         otp_hash = self._hash_otp(request.otp)
         
         try:
@@ -174,7 +175,7 @@ class OtpService:
                             """
                             SELECT email_otp_hash, expires_at, attempts 
                             FROM user_otps 
-                            WHERE user_id = %s
+                            WHERE email = %s
                             """,
                             (user_id,)
                         )

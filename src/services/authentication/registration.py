@@ -5,7 +5,6 @@ Handles user registration logic.
 
 from psycopg_pool import AsyncConnectionPool
 import asyncio
-from fastapi import HTTPException
 from uuid import uuid4
 from typing import Tuple, Optional
 
@@ -13,6 +12,12 @@ from src.config.logger import logger
 from src.config.settings import settings
 from src.schemas.authentication import RegistrationRequest
 from src.services.authentication.otp import OtpService
+from src.utils.exceptions import (
+    BadRequestException,
+    NotFoundException,
+    InternalServerException,
+    DatabaseTimeoutException
+)
 
 
 class RegistrationService:
@@ -41,12 +46,12 @@ class RegistrationService:
                 exists, is_active, existing_user_id = await self._check_email_exists(request.email)
         except asyncio.TimeoutError:
             logger.error("Database connection timeout")
-            raise HTTPException(status_code=500, detail="Database connection timeout")
+            raise DatabaseTimeoutException()
         
         # Case 1: Email exists and account is active → Error
         if exists and is_active:
             logger.warning("Registration attempt for active account: %s", request.email)
-            raise HTTPException(status_code=400, detail="Email already registered")
+            raise BadRequestException("Email already registered")
         
         # Case 2: Email exists but account is inactive → Resend OTP
         if exists and not is_active:
@@ -56,7 +61,7 @@ class RegistrationService:
                     await self.otp_service.send_and_store_otp(existing_user_id, request.email, background_tasks)
             except Exception as e:
                 logger.error("Failed to resend OTP: %s", str(e))
-                raise HTTPException(status_code=500, detail="Failed to send OTP. Please try again.")
+                raise InternalServerException("Failed to send OTP. Please try again.")
             
             return {"message": "OTP resent to email", "user_id": existing_user_id}
         
@@ -74,10 +79,10 @@ class RegistrationService:
             
             if isinstance(e, asyncio.TimeoutError):
                 logger.error("Database connection timeout")
-                raise HTTPException(status_code=500, detail="Database connection timeout")
+                raise DatabaseTimeoutException()
             else:
                 logger.error("Registration failed: %s", str(e))
-                raise HTTPException(status_code=500, detail="Registration failed. Please try again.")
+                raise InternalServerException("Registration failed. Please try again.")
         
         logger.info("User registered successfully: %s", request.email)
         return {"message": "User registered successfully", "user_id": user_id}
@@ -164,3 +169,95 @@ class RegistrationService:
         except Exception as e:
             logger.error("Database error creating user: %s - %s", email, str(e))
             raise
+
+    async def complete_registration(self, user_id: str, username: str, password: str, selfie_url: str, file_id: str) -> dict:
+        """
+        Complete user registration with username, password, and selfie.
+        
+        Args:
+            user_id: User's UUID (from registration token)
+            username: User's chosen username
+            password: User's password (will be hashed)
+            selfie_url: URL to user's uploaded selfie
+            file_id: ImageKit file ID for the selfie image (for deletion)
+            
+        Returns:
+            Success message with user_id
+            
+        Raises:
+            ServiceException: If user not found, username taken, or DB error
+        """
+        logger.info("Completing registration for user: %s", user_id)
+        
+        # Check if username is already taken
+        try:
+            async with asyncio.timeout(5):
+                username_exists = await self._check_username_exists(username)
+                if username_exists:
+                    raise BadRequestException("Username already taken")
+        except asyncio.TimeoutError:
+            logger.error("Database timeout checking username")
+            raise DatabaseTimeoutException()
+        
+        # Hash password
+        password_hash = self._hash_password(password)
+        
+        # Update user and create credentials
+        try:
+            async with asyncio.timeout(10):
+                async with self.db_pool.connection() as conn:
+                    async with conn.transaction():
+                        async with conn.cursor() as cur:
+                            # Update user with username, selfie_url, file_id and activate
+                            await cur.execute(
+                                """
+                                UPDATE users 
+                                SET username = %s, selfie_url = %s, file_id = %s, is_active = TRUE, updated_at = NOW()
+                                WHERE id = %s AND is_active = FALSE
+                                RETURNING id
+                                """,
+                                (username, selfie_url, file_id, user_id)
+                            )
+                            result = await cur.fetchone()
+                            
+                            if not result:
+                                raise NotFoundException("User not found or already activated")
+                            
+                            # Insert credentials
+                            await cur.execute(
+                                """
+                                INSERT INTO user_credentials (user_id, password_hash)
+                                VALUES (%s, %s)
+                                ON CONFLICT (user_id) DO UPDATE SET
+                                    password_hash = EXCLUDED.password_hash,
+                                    updated_at = NOW()
+                                """,
+                                (user_id, password_hash)
+                            )
+                    
+                    logger.info("Registration completed for user: %s", user_id)
+                    return {"message": "Registration completed successfully"}
+                    
+        except (BadRequestException, NotFoundException):
+            raise
+        except asyncio.TimeoutError:
+            logger.error("Database timeout completing registration")
+            raise DatabaseTimeoutException()
+        except Exception as e:
+            logger.error("Error completing registration: %s", str(e))
+            raise InternalServerException("Failed to complete registration")
+
+    async def _check_username_exists(self, username: str) -> bool:
+        """Check if username already exists."""
+        async with self.db_pool.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    "SELECT 1 FROM users WHERE username = %s",
+                    (username,)
+                )
+                return await cur.fetchone() is not None
+
+    def _hash_password(self, password: str) -> str:
+        """Hash password using bcrypt via passlib."""
+        from passlib.hash import bcrypt
+        return bcrypt.hash(password)

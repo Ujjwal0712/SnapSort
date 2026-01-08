@@ -32,16 +32,8 @@ class Settings(BaseSettings):
     QDRANT_PORT: int 
     QDRANT_COLLECTION: str = "face_embeddings"
     
-    # AWS S3
-    AWS_ACCESS_KEY_ID: Optional[str] 
-    AWS_SECRET_ACCESS_KEY: Optional[str] 
-    AWS_REGION: str = "us-east-1"
-    S3_BUCKET_NAME: str = "snapsort-photos"
-    
-    # Cloudinary (for image transformations)
-    CLOUDINARY_CLOUD_NAME: Optional[str]
-    CLOUDINARY_API_KEY: Optional[str]
-    CLOUDINARY_API_SECRET: Optional[str] 
+    # ImageKit
+    IMAGEKIT_PRIVATE_KEY: str
     
     # JWT Authentication
     JWT_SECRET_KEY: str 
@@ -66,18 +58,21 @@ class Settings(BaseSettings):
     # Connection pool configuration
     POOL_MIN_SIZE: int = 5
     POOL_MAX_SIZE: int = 20
-
     MAILERSEND_API_KEY: str
     MAILERSEND_FROM_EMAIL: str = "snapsort@test-ywj2lpnz12kg7oqz.mlsender.net"
 
     OTP_LENGTH: int = 6
     OTP_EXPIRY_MINUTES: int = 10
     MAX_ATTEMPTS: int = 3
+
+    # Registration Token (short-lived token after OTP verification)
+    REGISTRATION_TOKEN_EXPIRE_MINUTES: int = 5
     
     
     class Config:
         env_file = ".env"
         case_sensitive = True
+        extra = "ignore"
 
 
 @lru_cache()

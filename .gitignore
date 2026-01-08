@@ -1,3 +1,4 @@
 .snapsortenv/
 __pycache__/
 .env
+.pycache/

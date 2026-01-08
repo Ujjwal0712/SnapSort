@@ -76,7 +76,75 @@ app.add_middleware(
 app.include_router(authentication.router, prefix="/auth", tags=["Authentication"])
 
 
+# Exception handlers for standardized error responses
+from fastapi import HTTPException, Request
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+from src.utils.exceptions import ServiceException
+
+
+@app.exception_handler(ServiceException)
+async def service_exception_handler(request: Request, exc: ServiceException):
+    """Convert ServiceException to standardized error response."""
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "success": False,
+            "message": exc.message,
+            "error": exc.error if exc.error else exc.message
+        }
+    )
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """Convert HTTPException to standardized error response."""
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "success": False,
+            "message": exc.detail,
+            "error": exc.detail
+        }
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Convert validation errors to standardized error response."""
+    errors = []
+    for error in exc.errors():
+        field = ".".join(str(loc) for loc in error["loc"][1:])  # Skip 'body' prefix
+        errors.append({
+            "field": field,
+            "message": error["msg"]
+        })
+    
+    return JSONResponse(
+        status_code=422,
+        content={
+            "success": False,
+            "message": "Validation error",
+            "error": errors
+        }
+    )
+
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request: Request, exc: Exception):
+    """Handle unexpected exceptions with standardized error response."""
+    logger.error("Unexpected error: %s", str(exc))
+    return JSONResponse(
+        status_code=500,
+        content={
+            "success": False,
+            "message": "Internal server error",
+            "error": str(exc) if settings.DEBUG else None
+        }
+    )
+
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
-    return {"status": "healthy", "app": settings.APP_NAME}
+    return {"success": True, "message": "healthy", "data": {"app": settings.APP_NAME}}
